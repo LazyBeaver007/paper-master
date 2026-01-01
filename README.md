@@ -1,6 +1,7 @@
-# Tauri + SvelteKit + TypeScript
+# Paper Master
 
-This template should help get you started developing with Tauri, SvelteKit and TypeScript in Vite.
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/06e28045-bbe4-4be1-9164-5e8874307ffa" />
+
 
 ## Recommended IDE Setup
 
