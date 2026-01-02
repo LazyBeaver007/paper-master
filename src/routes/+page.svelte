@@ -1,11 +1,11 @@
-<!-- src/routes/+page.svelte - COMPLETE FILE -->
+<!-- src/routes/+page.svelte -->
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount, onDestroy, tick } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import * as pdfjsLib from 'pdfjs-dist';
   import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url';
+  import 'pdfjs-dist/web/pdf_viewer.css'; // ← OFFICIAL PDF.js CSS
 
-  // Setup PDF.js worker
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
   interface Paper {
@@ -13,6 +13,12 @@
     title: string;
     pdf_path: string;
     created_at: string | null;
+  }
+
+  interface Excerpt {
+    id: number;
+    text: string;
+    page: number;
   }
 
   let papers: Paper[] = [];
@@ -26,9 +32,19 @@
   let numPages = 0;
   let scale = 1.3;
   let canvas: HTMLCanvasElement;
+  let textLayerDiv: HTMLDivElement;
   let ctx: CanvasRenderingContext2D;
-  let containerWidth = 0;
   let pdfLoading = false;
+
+  // Excerpts
+  let excerpts: Excerpt[] = [];
+  let nextExcerptId = 1;
+
+  // Selection UI
+  let showFloatingButton = false;
+  let floatingButtonX = 0;
+  let floatingButtonY = 0;
+  let selectedText = '';
 
   async function loadPapers() {
     try {
@@ -55,9 +71,9 @@
 
   async function openPaper(paper: Paper) {
     selectedPaper = paper;
+    excerpts = [];
+    nextExcerptId = 1;
     message = `Loading "${paper.title}"...`;
-    pdfLoading = true;
-    pageNum = 1;
 
     try {
       const bytes: Uint8Array = await invoke('read_pdf_file', { path: paper.pdf_path });
@@ -65,128 +81,137 @@
       pdfDoc = await loadingTask.promise;
 
       numPages = pdfDoc.numPages;
-      await tick();
-      renderPage(pageNum);
+      pageNum = 1;
       message = '';
+      renderPage(pageNum);
     } catch (err) {
       message = `Failed to load PDF: ${err}`;
-      console.error('PDF load error:', err);
-      pdfLoading = false;
+      console.error(err);
     }
   }
 
   async function renderPage(num: number) {
-    if (!pdfDoc || !canvas) return;
-    
     pdfLoading = true;
-    try {
-      const page = await pdfDoc.getPage(num);
-      const viewport = page.getViewport({ scale });
-      const outputScale = window.devicePixelRatio || 1;
+    const page = await pdfDoc.getPage(num);
 
-      canvas.width = Math.floor(viewport.width * outputScale);
-      canvas.height = Math.floor(viewport.height * outputScale);
-      canvas.style.width = `${viewport.width}px`;
-      canvas.style.height = `${viewport.height}px`;
+    const viewport = page.getViewport({ scale });
+    const outputScale = window.devicePixelRatio || 1;
 
-      ctx = canvas.getContext('2d')!;
-      ctx.save();
-      ctx.scale(outputScale, outputScale);
+    // Canvas
+    canvas.width = Math.floor(viewport.width * outputScale);
+    canvas.height = Math.floor(viewport.height * outputScale);
+    canvas.style.width = viewport.width + 'px';
+    canvas.style.height = viewport.height + 'px';
 
-      const renderContext = {
-        canvasContext: ctx,
-        viewport: viewport
-      };
+    ctx = canvas.getContext('2d')!;
+    ctx.scale(outputScale, outputScale);
 
-      await page.render(renderContext).promise;
-      ctx.restore();
-      pageNum = num;
-      pdfLoading = false;
-    } catch (err) {
-      console.error('Render error:', err);
-      pdfLoading = false;
+    const renderContext = {
+      canvasContext: ctx,
+      viewport: viewport
+    };
+    await page.render(renderContext).promise;
+
+    // Text layer (OFFICIAL PDF.js)
+    textLayerDiv.innerHTML = '';
+    const textContent = await page.getTextContent();
+    pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container: textLayerDiv,
+      viewport: viewport,
+      textDivs: []
+    }).promise.then(() => {
+      setupTextSelection();
+    });
+
+    pdfLoading = false;
+  }
+
+  function setupTextSelection() {
+    textLayerDiv.style.userSelect = 'text';
+    textLayerDiv.addEventListener('mouseup', handleTextSelection);
+  }
+
+  function handleTextSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) {
+      showFloatingButton = false;
+      return;
     }
+
+    selectedText = selection.toString().trim();
+    if (selectedText.length < 3) {
+      showFloatingButton = false;
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    const containerRect = textLayerDiv.getBoundingClientRect();
+
+    floatingButtonX = rect.left - containerRect.left + rect.width / 2;
+    floatingButtonY = rect.top - containerRect.top - 40;
+
+    showFloatingButton = true;
+  }
+
+  function createExcerpt() {
+    if (!selectedText) return;
+
+    excerpts = [...excerpts, {
+      id: nextExcerptId++,
+      text: selectedText,
+      page: pageNum
+    }];
+
+    window.getSelection()?.removeAllRanges();
+    showFloatingButton = false;
+    selectedText = '';
   }
 
   function nextPage() {
-    if (pageNum >= numPages || pdfLoading) return;
+    if (pageNum >= numPages) return;
     pageNum++;
     renderPage(pageNum);
   }
 
   function prevPage() {
-    if (pageNum <= 1 || pdfLoading) return;
+    if (pageNum <= 1) return;
     pageNum--;
     renderPage(pageNum);
   }
 
   function zoomIn() {
-    if (scale >= 3 || pdfLoading) return;
     scale += 0.2;
     renderPage(pageNum);
   }
 
   function zoomOut() {
-    if (scale <= 0.5 || pdfLoading) return;
-    scale = Math.max(0.5, scale - 0.2);
+    scale -= 0.2;
+    if (scale < 0.5) scale = 0.5;
     renderPage(pageNum);
   }
 
   function backToLibrary() {
-    if (pdfDoc) {
-      pdfDoc.destroy();
-      pdfDoc = null;
-    }
     selectedPaper = null;
-    pageNum = 1;
-    numPages = 0;
-    scale = 1.3;
-    pdfLoading = false;
-    message = '';
-  }
-
-  // Keyboard shortcuts
-  function handleKeydown(event: KeyboardEvent) {
-    if (!selectedPaper) return;
-    
-    switch (event.code) {
-      case 'ArrowLeft':
-      case 'ArrowUp':
-        event.preventDefault();
-        prevPage();
-        break;
-      case 'ArrowRight':
-      case 'ArrowDown':
-        event.preventDefault();
-        nextPage();
-        break;
-      case 'Equal':
-      case 'NumpadAdd':
-        event.preventDefault();
-        zoomIn();
-        break;
-      case 'Minus':
-      case 'NumpadSubtract':
-        event.preventDefault();
-        zoomOut();
-        break;
-    }
+    pdfDoc = null;
+    excerpts = [];
+    showFloatingButton = false;
   }
 
   onMount(() => {
     loadPapers();
-    window.addEventListener('keydown', handleKeydown);
+    document.addEventListener('click', (e) => {
+      if (showFloatingButton && !e.target.closest('.floating-excerpt-btn')) {
+        showFloatingButton = false;
+      }
+    });
   });
 
   onDestroy(() => {
-    window.removeEventListener('keydown', handleKeydown);
-    if (pdfDoc) {
-      pdfDoc.destroy();
-    }
+    if (pdfDoc) pdfDoc.destroy();
   });
 </script>
-
-<svelte:window bind:innerWidth={containerWidth} />
 
 <main class="app">
   {#if !selectedPaper}
@@ -199,49 +224,25 @@
 
       <div class="toolbar">
         <button on:click={addPaper} class="btn-primary" disabled={loading}>
-          {#if loading}
-            <span class="spinner"></span>
-            Adding...
-          {:else}
-            + Add New Paper
-          {/if}
+          {#if loading} Adding... {:else} + Add New Paper {/if}
         </button>
-        <button on:click={loadPapers} class="btn-secondary" disabled={loading}>
-          Refresh
-        </button>
+        <button on:click={loadPapers} class="btn-secondary">Refresh</button>
       </div>
 
-      {#if papers.length === 0 && message}
+      {#if message && papers.length === 0}
         <div class="empty-state">
-          <div class="empty-icon">📚</div>
           <p>{message}</p>
-          <p class="empty-subtitle">Import your first research paper to get started</p>
         </div>
       {/if}
 
       {#if papers.length > 0}
-        <div class="library-stats">
-          <span class="stat">{papers.length} papers</span>
-          <span class="stat">Ready to excerpt</span>
-        </div>
-        
         <div class="grid">
           {#each papers as paper (paper.id)}
-            <div 
-              class="card" 
-              on:click={() => openPaper(paper)} 
-              on:keydown={(e) => e.key === 'Enter' && openPaper(paper)}
-              role="button" 
-              tabindex="0"
-            >
+            <div class="card" role="button" tabindex="0" on:click={() => openPaper(paper)}>
               <div class="card-content">
                 <div class="title">{paper.title}</div>
                 <div class="meta">
-                  Added {new Date(paper.created_at || Date.now()).toLocaleDateString('en-US', { 
-                    month: 'short', 
-                    day: 'numeric', 
-                    year: 'numeric' 
-                  })}
+                  Added {new Date(paper.created_at || '').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </div>
               </div>
               <button class="open-btn" on:click|stopPropagation={() => openPaper(paper)}>
@@ -252,340 +253,206 @@
         </div>
       {/if}
     </div>
-
   {:else}
     <!-- Reader Split View -->
     <div class="reader">
       <header class="reader-header">
-        <button on:click={backToLibrary} class="back-btn" title="Back to Library (Esc)">
-          ← Library
-        </button>
-        <div class="paper-info">
-          <h2>{selectedPaper.title}</h2>
-          <span class="page-counter">
-            Page {pageNum} of {numPages}
-          </span>
-        </div>
-        <div class="pdf-controls">
-          <button on:click={zoomOut} disabled={scale <= 0.5 || pdfLoading} title="Zoom Out (-)">
-            −
-          </button>
-          <span class="zoom-level">{Math.round(scale * 100)}%</span>
-          <button on:click={zoomIn} disabled={scale >= 3 || pdfLoading} title="Zoom In (+)">
-            +
-          </button>
-          <button on:click={prevPage} disabled={pageNum <= 1 || pdfLoading} title="Previous Page (←)">
-            ‹
-          </button>
-          <button on:click={nextPage} disabled={pageNum >= numPages || pdfLoading} title="Next Page (→)">
-            ›
-          </button>
-        </div>
+        <button on:click={backToLibrary} class="back-btn">← Library</button>
+        <h2>{selectedPaper.title}</h2>
+        <div class="spacer"></div>
       </header>
 
       <div class="split-view">
-        <!-- PDF Viewer Pane -->
         <div class="pdf-pane">
-          {#if pdfDoc}
-            <div class="pdf-container">
-              <div class="pdf-controls-top">
-                <span>Page {pageNum} • {Math.round(scale * 100)}%</span>
-              </div>
-              <div class="pdf-canvas-container" bind:clientWidth={containerWidth}>
-                <canvas bind:this={canvas} class="pdf-canvas"></canvas>
-                {#if pdfLoading}
-                  <div class="pdf-overlay">
-                    <div class="loading-spinner"></div>
-                    <p>Loading page {pageNum}...</p>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          {:else}
-            <div class="loading-pane">
-              <div class="loading-spinner"></div>
-              <p>Loading PDF...</p>
-            </div>
-          {/if}
-        </div>
-
-        <!-- Notes & Excerpts Pane -->
-        <div class="notes-pane">
-          <div class="notes-header">
-            <h3>Excerpts & Notes</h3>
-            <div class="notes-actions">
-              <button class="btn-small primary">+ New Excerpt</button>
-              <button class="btn-small secondary">Review Cards</button>
-            </div>
+          <div class="pdf-controls">
+            <button on:click={zoomOut} disabled={scale <= 0.5}>−</button>
+            <span>{Math.round(scale * 100)}%</span>
+            <button on:click={zoomIn} disabled={scale >= 3}>+</button>
+            <span class="page-info">Page {pageNum} of {numPages}</span>
+            <button on:click={prevPage} disabled={pageNum <= 1}>‹</button>
+            <button on:click={nextPage} disabled={pageNum >= numPages}>›</button>
           </div>
-          <div class="notes-content">
-            {#if true}
-              <div class="empty-notes">
-                <div class="empty-icon">✨</div>
-                <h4>Highlight text to create excerpts</h4>
-                <p>Select any text in the PDF → it appears here → tap to make flashcard</p>
-                <div class="keyboard-hints">
-                  <span>← → Page navigation</span>
-                  <span>+ − Zoom</span>
-                  <span>Esc Back to library</span>
-                </div>
-              </div>
-            {:else}
-              <!-- Future: List of excerpts -->
+
+          <div class="pdf-viewer-container">
+            <div class="pdf-canvas-container">
+              <canvas bind:this={canvas}></canvas>
+              <div class="textLayer" bind:this={textLayerDiv}></div>
+            </div>
+
+            {#if pdfLoading}
+              <div class="pdf-overlay">Loading page {pageNum}...</div>
+            {/if}
+
+            {#if showFloatingButton}
+              <button
+                class="floating-excerpt-btn"
+                style="left: {floatingButtonX}px; top: {floatingButtonY}px;"
+                on:click|stopPropagation={createExcerpt}
+              >
+                + Create Excerpt
+              </button>
             {/if}
           </div>
+        </div>
+
+        <div class="notes-pane">
+          <div class="notes-header">
+            <h3>Excerpts & Notes ({excerpts.length})</h3>
+          </div>
+
+          {#if excerpts.length === 0}
+            <div class="notes-placeholder">
+              <p>Select text in the PDF → click "+ Create Excerpt"</p>
+              <p class="hint">These will become your flashcards for spaced repetition</p>
+            </div>
+          {:else}
+            <div class="excerpts-list">
+              {#each excerpts as excerpt (excerpt.id)}
+                <div class="excerpt-item">
+                  <p class="excerpt-text">"{excerpt.text}"</p>
+                  <p class="excerpt-page">— Page {excerpt.page}</p>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       </div>
     </div>
   {/if}
 
-  {#if message && !loading && !pdfLoading}
-    <div class="toast" class:success={message.includes('successfully')}>
-      {message}
-    </div>
+  {#if message && loading}
+    <div class="toast">{message}</div>
   {/if}
 </main>
 
 <style>
   :global(body) {
     margin: 0;
-    padding: 0;
-    background: #0a0a0f;
-    color: #e2e8f0;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    overflow-x: hidden;
-  }
-
-  :global(*, *::before, *::after) {
-    box-sizing: border-box;
+    background: #0f0f17;
+    color: #e0e0e0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
   }
 
   .app {
     min-height: 100vh;
-    background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 100%);
   }
 
   /* Library View */
   .library {
     padding: 2rem;
-    max-width: 1400px;
+    max-width: 1200px;
     margin: 0 auto;
   }
 
   .header {
     text-align: center;
-    margin-bottom: 4rem;
+    margin-bottom: 3rem;
   }
 
   h1 {
-    font-size: clamp(2.5rem, 6vw, 4.5rem);
-    font-weight: 900;
-    background: linear-gradient(135deg, #ff6b6b, #f7931e, #da1b60, #8b5cf6);
-    background-size: 300% 300%;
+    font-size: 3.5rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, #ff6b6b, #da1b60);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
-    background-clip: text;
-    animation: gradient-shift 8s ease infinite;
     margin: 0;
-    letter-spacing: -0.02em;
-  }
-
-  @keyframes gradient-shift {
-    0%, 100% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
   }
 
   .tagline {
-    font-size: 1.25rem;
-    color: #94a3b8;
-    margin-top: 1rem;
-    font-weight: 400;
-    max-width: 500px;
-    margin-left: auto;
-    margin-right: auto;
+    font-size: 1.2rem;
+    color: #888;
+    margin-top: 0.5rem;
   }
 
   .toolbar {
     display: flex;
     justify-content: center;
-    gap: 1.5rem;
-    margin-bottom: 3rem;
-    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 2rem;
   }
 
   .btn-primary, .btn-secondary, .btn-small {
-    padding: 1rem 2rem;
+    padding: 0.8rem 1.6rem;
     border: none;
-    border-radius: 16px;
+    border-radius: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    font-size: 1rem;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.75rem;
-    text-decoration: none;
-    position: relative;
-    overflow: hidden;
+    transition: all 0.2s;
   }
 
   .btn-primary {
-    background: linear-gradient(135deg, #da1b60, #c01852);
+    background: #da1b60;
     color: white;
-    box-shadow: 0 8px 32px rgba(218, 27, 96, 0.4);
+    font-size: 1.1rem;
   }
 
   .btn-primary:hover:not(:disabled) {
-    transform: translateY(-3px);
-    box-shadow: 0 16px 48px rgba(218, 27, 96, 0.6);
+    background: #c01852;
+    transform: translateY(-2px);
   }
 
-  .btn-secondary, .btn-small {
-    background: #252537;
-    color: #cbd5e1;
-    border: 1px solid #40414f;
-  }
-
-  .btn-secondary:hover:not(:disabled), .btn-small:hover:not(:disabled) {
-    background: #2d2d42;
-    border-color: #da1b60;
-    color: white;
-  }
-
-  .btn-small {
-    padding: 0.75rem 1.5rem;
-    font-size: 0.875rem;
-  }
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none !important;
-  }
-
-  .spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid rgba(255,255,255,0.3);
-    border-top: 2px solid white;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-
-  .empty-state {
-    text-align: center;
-    padding: 6rem 2rem;
-    color: #64748b;
-  }
-
-  .empty-icon {
-    font-size: 5rem;
-    margin-bottom: 1.5rem;
-    opacity: 0.7;
-  }
-
-  .empty-subtitle {
-    font-size: 1.1rem;
-    margin-top: 0.5rem;
-    opacity: 0.8;
-  }
-
-  .library-stats {
-    text-align: center;
-    margin: 2rem 0 3rem;
-  }
-
-  .stat {
-    display: inline-block;
-    background: rgba(218, 27, 96, 0.2);
-    color: #fda4af;
-    padding: 0.5rem 1.25rem;
-    border-radius: 50px;
-    font-size: 0.9rem;
-    font-weight: 500;
-    margin: 0 0.75rem;
+  .btn-secondary {
+    background: #252533;
+    color: #ccc;
   }
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-    gap: 2rem;
-    margin-top: 2rem;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.5rem;
   }
 
   .card {
-    background: linear-gradient(145deg, #1a1a24, #161623);
-    border-radius: 24px;
+    background: #1a1a24;
+    border-radius: 16px;
     overflow: hidden;
-    box-shadow: 
-      0 20px 40px rgba(0,0,0,0.4),
-      0 1px 0 rgba(255,255,255,0.1) inset;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    transition: all 0.3s;
     cursor: pointer;
-    border: 1px solid rgba(255,255,255,0.05);
-    height: 160px;
     display: flex;
     flex-direction: column;
   }
 
   .card:hover {
-    transform: translateY(-12px) scale(1.02);
-    box-shadow: 
-      0 32px 64px rgba(218, 27, 96, 0.25),
-      0 1px 0 rgba(255,255,255,0.15) inset;
-    border-color: rgba(218, 27, 96, 0.3);
-  }
-
-  .card:focus {
-    outline: 3px solid rgba(218, 27, 96, 0.5);
-    outline-offset: 2px;
+    transform: translateY(-8px);
+    box-shadow: 0 12px 30px rgba(218, 27, 96, 0.2);
   }
 
   .card-content {
-    padding: 2rem;
+    padding: 1.5rem;
     flex-grow: 1;
-    display: flex;
-    flex-direction: column;
   }
 
   .title {
-    font-size: 1.4rem;
-    font-weight: 700;
-    margin-bottom: 0.75rem;
-    color: #f8fafc;
-    line-height: 1.3;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: white;
   }
 
   .meta {
     font-size: 0.95rem;
-    color: #94a3b8;
-    margin-top: auto;
+    color: #999;
   }
 
   .open-btn {
-    background: linear-gradient(135deg, #da1b60, #c01852);
+    background: #da1b60;
     color: white;
     border: none;
-    padding: 1.25rem;
-    font-weight: 700;
-    font-size: 0.95rem;
+    padding: 1rem;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.3s ease;
-    margin-top: auto;
   }
 
   .open-btn:hover {
-    background: linear-gradient(135deg, #c01852, #a11244);
-    transform: translateY(-2px);
+    background: #c01852;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 4rem;
+    color: #666;
+    font-size: 1.2rem;
   }
 
   /* Reader View */
@@ -593,203 +460,168 @@
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: #0f0f17;
   }
 
   .reader-header {
-    padding: 1.25rem 2rem;
-    background: rgba(20, 20, 28, 0.95);
-    backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(65, 65, 79, 0.5);
+    padding: 1rem 2rem;
+    background: #14141c;
+    border-bottom: 1px solid #252533;
     display: flex;
     align-items: center;
-    gap: 1.5rem;
-    position: sticky;
-    top: 0;
-    z-index: 100;
+    gap: 1rem;
   }
 
   .back-btn {
-    background: rgba(37, 37, 55, 0.8);
-    border: 1px solid rgba(65, 65, 79, 0.5);
-    color: #cbd5e1;
-    font-size: 0.95rem;
-    padding: 0.75rem 1.5rem;
-    border-radius: 12px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .back-btn:hover {
-    background: #da1b60;
-    border-color: #da1b60;
-    color: white;
-    transform: translateX(-2px);
-  }
-
-  .paper-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .paper-info h2 {
-    margin: 0 0 0.25rem 0;
+    background: none;
+    border: none;
+    color: #aaa;
     font-size: 1.5rem;
-    font-weight: 700;
-    color: #f8fafc;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .page-counter {
-    color: #94a3b8;
-    font-size: 0.875rem;
-    font-weight: 500;
-  }
-
-  .pdf-controls {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .pdf-controls button {
-    background: rgba(37, 37, 55, 0.8);
-    color: #cbd5e1;
-    border: 1px solid rgba(65, 65, 79, 0.5);
-    width: 42px;
-    height: 42px;
-    border-radius: 10px;
     cursor: pointer;
-    font-size: 1.1rem;
-    font-weight: 600;
-    transition: all 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
 
-  .pdf-controls button:hover:not(:disabled) {
-    background: #da1b60;
-    border-color: #da1b60;
+  .reader-header h2 {
+    margin: 0;
+    font-size: 1.4rem;
     color: white;
-    transform: scale(1.05);
+    flex-grow: 1;
   }
 
-  .zoom-level {
-    min-width: 50px;
-    text-align: center;
-    font-weight: 600;
-    color: #f8fafc;
-    font-size: 0.95rem;
-    font-variant-numeric: tabular-nums;
-  }
+  .spacer { flex-grow: 1; }
 
   .split-view {
     display: flex;
     flex: 1;
     overflow: hidden;
-    background: #0a0a0f;
   }
 
   .pdf-pane {
     flex: 6;
-    position: relative;
     background: #000;
     display: flex;
     flex-direction: column;
   }
 
-  .pdf-container {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-  }
-
-  .pdf-controls-top {
-    padding: 0.75rem 1.5rem;
-    background: rgba(0,0,0,0.8);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid rgba(65,65,79,0.3);
-    font-size: 0.875rem;
-    color: #94a3b8;
+  .pdf-controls {
+    padding: 1rem;
+    background: #14141c;
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.9rem;
+  }
+
+  .pdf-controls button {
+    background: #252533;
+    color: white;
+    border: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1.2rem;
+  }
+
+  .pdf-controls button:hover:not(:disabled) {
+    background: #da1b60;
+  }
+
+  .pdf-controls button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .page-info {
+    color: #aaa;
+    min-width: 120px;
+    text-align: center;
+  }
+
+  .pdf-viewer-container {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
   }
 
   .pdf-canvas-container {
+    position: relative;
     flex: 1;
     overflow: auto;
     background: #000;
     display: flex;
     justify-content: center;
     align-items: flex-start;
-    padding: 2rem;
-    position: relative;
+    padding: 1rem;
+    height: 100%;
   }
 
-  .pdf-canvas {
+  /* PERFECT TEXT LAYER - OFFICIAL PDF.js + our selection color */
+  .textLayer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    opacity: 0.2;
+    line-height: 1;
     max-width: 100%;
     max-height: 100%;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.8);
-    border-radius: 8px;
-    cursor: grab;
   }
 
-  .pdf-canvas:active {
-    cursor: grabbing;
+  .textLayer > span {
+    color: transparent;
+    position: absolute;
+    white-space: pre;
+    cursor: text;
+    transform-origin: 0% 0%;
+  }
+
+  .textLayer ::selection {
+    background: rgba(218, 27, 96, 0.4);
   }
 
   .pdf-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0,0,0,0.9);
+    background: rgba(0,0,0,0.7);
+    color: white;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 1.5rem;
+    font-size: 1.2rem;
     z-index: 10;
   }
 
-  .loading-spinner {
-    width: 48px;
-    height: 48px;
-    border: 4px solid rgba(218, 27, 96, 0.2);
-    border-top: 4px solid #da1b60;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
+  .floating-excerpt-btn {
+    position: absolute;
+    background: #da1b60;
+    color: white;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transform: translateX(-50%);
+    box-shadow: 0 8px 25px rgba(218, 27, 96, 0.4);
+    z-index: 100;
+    white-space: nowrap;
   }
 
-  .loading-pane {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    color: #64748b;
-    font-size: 1.25rem;
-    gap: 1rem;
+  .floating-excerpt-btn:hover {
+    background: #c01852;
   }
 
   .notes-pane {
     flex: 4;
-    background: linear-gradient(180deg, #1a1a24 0%, #161623 100%);
-    border-left: 1px solid rgba(65, 65, 79, 0.5);
+    background: #1e1e28;
+    border-left: 1px solid #252533;
     display: flex;
     flex-direction: column;
   }
 
   .notes-header {
-    padding: 1.75rem 2rem;
-    border-bottom: 1px solid rgba(65, 65, 79, 0.3);
+    padding: 1.5rem;
+    border-bottom: 1px solid #252533;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -797,130 +629,75 @@
 
   .notes-header h3 {
     margin: 0;
-    font-size: 1.4rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #f8fafc, #cbd5e1);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+    font-size: 1.3rem;
   }
 
-  .notes-actions {
+  .btn-small {
+    background: #2a2a38;
+    color: #ccc;
+    font-size: 0.9rem;
+    padding: 0.6rem 1rem;
+    border-radius: 8px;
+  }
+
+  .notes-placeholder {
+    flex-grow: 1;
+    padding: 3rem 2rem;
+    color: #888;
+    text-align: center;
     display: flex;
+    flex-direction: column;
+    justify-content: center;
     gap: 1rem;
   }
 
-  .notes-content {
+  .hint {
+    font-size: 0.95rem;
+    color: #666;
+  }
+
+  .excerpts-list {
+    padding: 1.5rem;
+    overflow-y: auto;
     flex: 1;
-    overflow: auto;
-    padding: 2rem;
   }
 
-  .empty-notes {
-    text-align: center;
-    padding: 3rem 2rem;
-    color: #94a3b8;
+  .excerpt-item {
+    background: #252533;
+    padding: 1.2rem;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+    border-left: 4px solid #da1b60;
+    transition: all 0.2s;
   }
 
-  .empty-notes .empty-icon {
-    font-size: 3.5rem;
-    margin-bottom: 1.5rem;
-    opacity: 0.7;
+  .excerpt-item:hover {
+    background: #2a2a38;
   }
 
-  .empty-notes h4 {
-    font-size: 1.4rem;
-    margin: 0 0 1rem 0;
-    font-weight: 600;
-    color: #f1f5f9;
+  .excerpt-text {
+    margin: 0 0 0.5rem 0;
+    font-style: italic;
+    color: #ddd;
+    line-height: 1.4;
   }
 
-  .keyboard-hints {
-    margin-top: 2rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1.5rem;
-    justify-content: center;
-    font-size: 0.875rem;
-  }
-
-  .keyboard-hints span {
-    background: rgba(218, 27, 96, 0.15);
-    color: #fda4af;
-    padding: 0.5rem 1rem;
-    border-radius: 8px;
+  .excerpt-page {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #aaa;
     font-weight: 500;
-    border: 1px solid rgba(218, 27, 96, 0.3);
   }
 
   .toast {
     position: fixed;
-    bottom: 2.5rem;
+    bottom: 2rem;
     left: 50%;
     transform: translateX(-50%);
-    background: linear-gradient(135deg, #da1b60, #c01852);
+    background: #da1b60;
     color: white;
-    padding: 1.25rem 2.5rem;
-    border-radius: 20px;
-    box-shadow: 0 20px 60px rgba(218, 27, 96, 0.5);
-    font-weight: 500;
-    max-width: 500px;
-    animation: toastSlide 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  .toast.success {
-    background: linear-gradient(135deg, #10b981, #059669);
-    box-shadow: 0 20px 60px rgba(16, 185, 129, 0.4);
-  }
-
-  @keyframes toastSlide {
-    from {
-      opacity: 0;
-      transform: translateX(-50%) translateY(20px) scale(0.95);
-    }
-    to {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0) scale(1);
-    }
-  }
-
-  /* Responsive */
-  @media (max-width: 1024px) {
-    .split-view {
-      flex-direction: column;
-    }
-    
-    .pdf-pane, .notes-pane {
-      flex: none;
-      height: 50vh;
-    }
-    
-    .pdf-canvas-container {
-      padding: 1rem;
-    }
-  }
-
-  @media (max-width: 768px) {
-    .grid {
-      grid-template-columns: 1fr;
-      gap: 1.5rem;
-    }
-    
-    .toolbar {
-      flex-direction: column;
-      align-items: center;
-    }
-    
-    .reader-header {
-      flex-direction: column;
-      gap: 1rem;
-      padding: 1rem;
-      text-align: center;
-    }
-    
-    .pdf-controls {
-      order: -1;
-      width: 100%;
-      justify-content: center;
-    }
+    padding: 1rem 2rem;
+    border-radius: 12px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
   }
 </style>
