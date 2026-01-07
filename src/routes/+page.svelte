@@ -1,10 +1,10 @@
 <!-- src/routes/+page.svelte -->
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import * as pdfjsLib from 'pdfjs-dist';
   import pdfjsWorker from 'pdfjs-dist/build/pdf.worker?url';
-  import 'pdfjs-dist/web/pdf_viewer.css'; // ← OFFICIAL PDF.js CSS
+  import 'pdfjs-dist/web/pdf_viewer.css';
 
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
@@ -33,7 +33,6 @@
   let scale = 1.3;
   let canvas: HTMLCanvasElement;
   let textLayerDiv: HTMLDivElement;
-  let ctx: CanvasRenderingContext2D;
   let pdfLoading = false;
 
   // Excerpts
@@ -45,6 +44,7 @@
   let floatingButtonX = 0;
   let floatingButtonY = 0;
   let selectedText = '';
+  let pointerDownOnFloatingButton = false;
 
   async function loadPapers() {
     try {
@@ -75,6 +75,9 @@
     nextExcerptId = 1;
     message = `Loading "${paper.title}"...`;
 
+    // Wait for Svelte to update the DOM so `canvas` and `textLayerDiv` are bound
+    await tick();
+
     try {
       const bytes: Uint8Array = await invoke('read_pdf_file', { path: paper.pdf_path });
       const loadingTask = pdfjsLib.getDocument({ data: bytes });
@@ -83,7 +86,7 @@
       numPages = pdfDoc.numPages;
       pageNum = 1;
       message = '';
-      renderPage(pageNum);
+      await renderPage(pageNum);
     } catch (err) {
       message = `Failed to load PDF: ${err}`;
       console.error(err);
@@ -97,13 +100,13 @@
     const viewport = page.getViewport({ scale });
     const outputScale = window.devicePixelRatio || 1;
 
-    // Canvas
+    // Canvas setup
     canvas.width = Math.floor(viewport.width * outputScale);
     canvas.height = Math.floor(viewport.height * outputScale);
     canvas.style.width = viewport.width + 'px';
     canvas.style.height = viewport.height + 'px';
 
-    ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext('2d')!;
     ctx.scale(outputScale, outputScale);
 
     const renderContext = {
@@ -112,30 +115,131 @@
     };
     await page.render(renderContext).promise;
 
-    // Text layer (OFFICIAL PDF.js)
+    // Text layer setup - CRITICAL FIX
     textLayerDiv.innerHTML = '';
+    textLayerDiv.style.width = viewport.width + 'px';
+    textLayerDiv.style.height = viewport.height + 'px';
+    textLayerDiv.style.left = '0';
+    textLayerDiv.style.top = '0';
+    textLayerDiv.style.position = 'absolute';
+
     const textContent = await page.getTextContent();
-    pdfjsLib.renderTextLayer({
-      textContentSource: textContent,
-      container: textLayerDiv,
-      viewport: viewport,
-      textDivs: []
-    }).promise.then(() => {
-      setupTextSelection();
-    });
+
+    // Try common pdfjs text-layer APIs (some builds expect `textContentSource`,
+    // others `textContent`). If that fails, fallback to manual span building.
+    let createdSpans = 0;
+    try {
+      let renderResult: any;
+
+      try {
+        renderResult = pdfjsLib.renderTextLayer({
+          textContentSource: textContent,
+          container: textLayerDiv,
+          viewport: viewport,
+          textDivs: [],
+          enhanceTextSelection: true
+        });
+      } catch (e) {
+        renderResult = pdfjsLib.renderTextLayer({
+          textContent,
+          container: textLayerDiv,
+          viewport: viewport,
+          textDivs: [],
+          enhanceTextSelection: true
+        });
+      }
+
+      if (renderResult && typeof renderResult.promise !== 'undefined') {
+        await renderResult.promise;
+      } else if (renderResult && typeof renderResult.then === 'function') {
+        await renderResult;
+      } else {
+        await tick();
+      }
+
+      createdSpans = textLayerDiv.querySelectorAll('span').length;
+    } catch (err) {
+      console.error('Error rendering text layer (renderTextLayer):', err);
+    }
+
+    // If no spans were created by the library, build a manual text layer.
+    if (createdSpans === 0) {
+      try {
+        buildTextLayerManual(textContent, viewport, textLayerDiv);
+      } catch (err) {
+        console.error('Manual text-layer build failed:', err);
+      }
+    }
 
     pdfLoading = false;
+    setupTextSelection();
   }
 
   function setupTextSelection() {
+    // Enable text selection on the text layer
+    textLayerDiv.style.pointerEvents = 'auto';
     textLayerDiv.style.userSelect = 'text';
+    textLayerDiv.style.webkitUserSelect = 'text';
+    
+    // Remove any old listeners and add new one
+    textLayerDiv.removeEventListener('mouseup', handleTextSelection);
     textLayerDiv.addEventListener('mouseup', handleTextSelection);
+    // Also listen for selection changes so keyboard selections trigger the UI
+    document.removeEventListener('selectionchange', handleTextSelection);
+    document.addEventListener('selectionchange', handleTextSelection);
+  }
+
+  function buildTextLayerManual(textContent: any, viewport: any, container: HTMLElement) {
+    container.innerHTML = '';
+    const items = textContent.items || [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const span = document.createElement('span');
+      span.textContent = item.str || '';
+      span.style.position = 'absolute';
+      span.style.whiteSpace = 'pre';
+      span.style.pointerEvents = 'auto';
+      span.style.cursor = 'text';
+
+      try {
+        // Use viewport helpers for converting PDF text coordinates to DOM pixels
+        if (typeof viewport.convertToViewportPoint === 'function') {
+          const pt = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+          const x = pt[0];
+          const y = pt[1];
+
+          // Try to estimate font size from transform matrix or fallback to a default
+          const fontHeight = (item.height || (item.transform && item.transform[0]) || 10) * (viewport.scale || 1);
+
+          span.style.left = x + 'px';
+          // Adjust top so text aligns visually (PDF coordinates origin differs)
+          span.style.top = (y - fontHeight) + 'px';
+          span.style.fontSize = Math.max(8, fontHeight) + 'px';
+        } else {
+          span.style.left = '0px';
+          span.style.top = '0px';
+          span.style.fontSize = '10px';
+        }
+      } catch (e) {
+        span.style.left = '0px';
+        span.style.top = '0px';
+        span.style.fontSize = '10px';
+      }
+
+      container.appendChild(span);
+    }
   }
 
   function handleTextSelection() {
+    if (pointerDownOnFloatingButton) return;
+
     const selection = window.getSelection();
+    // If there's no selection or it's collapsed, do nothing here.
+    // We'll hide the floating button only when the user clicks outside
+    // the text layer/button. This keeps the button persistent while
+    // text remains selected (even if selection briefly collapses).
     if (!selection || selection.isCollapsed) {
-      showFloatingButton = false;
       return;
     }
 
@@ -201,15 +305,46 @@
 
   onMount(() => {
     loadPapers();
-    document.addEventListener('click', (e) => {
-      if (showFloatingButton && !e.target.closest('.floating-excerpt-btn')) {
-        showFloatingButton = false;
+
+    const docClickHandler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      // If the click is inside the floating button or the text layer, do nothing.
+      if (target && (target.closest('.floating-excerpt-btn') || (textLayerDiv && textLayerDiv.contains(target)))) {
+        return;
       }
-    });
+
+      // Clicked outside: hide floating button and clear selection.
+      showFloatingButton = false;
+      selectedText = '';
+      window.getSelection()?.removeAllRanges();
+    };
+
+    const mouseDownHandler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      pointerDownOnFloatingButton = !!(target && target.closest('.floating-excerpt-btn'));
+    };
+
+    const mouseUpHandler = () => {
+      pointerDownOnFloatingButton = false;
+    };
+
+    document.addEventListener('click', docClickHandler);
+    document.addEventListener('mousedown', mouseDownHandler);
+    document.addEventListener('mouseup', mouseUpHandler);
+
+    // store handlers for cleanup on destroy by attaching to component (closure)
+    (window as any).__pm_internal_handlers = { docClickHandler, mouseDownHandler, mouseUpHandler };
   });
 
   onDestroy(() => {
     if (pdfDoc) pdfDoc.destroy();
+    const handlers = (window as any).__pm_internal_handlers;
+    if (handlers) {
+      document.removeEventListener('click', handlers.docClickHandler);
+      document.removeEventListener('mousedown', handlers.mouseDownHandler);
+      document.removeEventListener('mouseup', handlers.mouseUpHandler);
+      delete (window as any).__pm_internal_handlers;
+    }
   });
 </script>
 
@@ -238,7 +373,13 @@
       {#if papers.length > 0}
         <div class="grid">
           {#each papers as paper (paper.id)}
-            <div class="card" role="button" tabindex="0" on:click={() => openPaper(paper)}>
+            <div
+              class="card"
+              role="button"
+              tabindex="0"
+              on:click={() => openPaper(paper)}
+              on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPaper(paper); } }}
+            >
               <div class="card-content">
                 <div class="title">{paper.title}</div>
                 <div class="meta">
@@ -538,50 +679,67 @@
     text-align: center;
   }
 
+  /* FIXED PDF VIEWER SECTION */
   .pdf-viewer-container {
     position: relative;
     flex: 1;
-    overflow: hidden;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 20px;
+    background: #000;
   }
 
   .pdf-canvas-container {
     position: relative;
-    flex: 1;
-    overflow: auto;
-    background: #000;
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    padding: 1rem;
-    height: 100%;
+    display: inline-block;
+    background: white;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
   }
 
-  /* PERFECT TEXT LAYER - OFFICIAL PDF.js + our selection color */
+  /* CRITICAL TEXT LAYER FIXES */
   .textLayer {
     position: absolute;
-    inset: 0;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
     overflow: hidden;
-    opacity: 0.2;
+    opacity: 1;
     line-height: 1;
-    max-width: 100%;
-    max-height: 100%;
+    z-index: 2;
+    pointer-events: auto !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
   }
 
   .textLayer > span {
-    color: transparent;
+    color: transparent !important;
     position: absolute;
     white-space: pre;
     cursor: text;
     transform-origin: 0% 0%;
   }
 
+  /* Selection color */
   .textLayer ::selection {
-    background: rgba(218, 27, 96, 0.4);
+    background: rgba(218, 27, 96, 0.4) !important;
+  }
+
+  /* Ensure canvas is below */
+  canvas {
+    position: relative;
+    z-index: 1;
+    display: block;
   }
 
   .pdf-overlay {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     background: rgba(0,0,0,0.7);
     color: white;
     display: flex;
