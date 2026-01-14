@@ -467,395 +467,130 @@
 </main>
 
 <style>
-  :global(body) {
+  :root{
+    --bg: #fbfaf8;
+    --surface: #ffffff;
+    --muted: #6b6b65;
+    --text: #22221f;
+    --accent: #7f5f3b; /* warm clay */
+    --accent-weak: rgba(127,95,59,0.12);
+    --card-shadow: 0 6px 18px rgba(34,34,34,0.06);
+  }
+
+  :global(body){
     margin: 0;
-    background: #0f0f17;
-    color: #e0e0e0;
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing:antialiased;
   }
 
-  .app {
-    min-height: 100vh;
+  .app{ min-height:100vh; }
+
+  /* Library */
+  .library{ padding:2.5rem; max-width:1100px; margin:0 auto; }
+
+  .header{ text-align:center; margin-bottom:2.5rem; }
+
+  h1{
+    margin:0;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-weight:500;
+    font-size:2.6rem;
+    color:var(--text);
+    letter-spacing: -0.02em;
   }
 
-  /* Library View */
-  .library {
-    padding: 2rem;
-    max-width: 1200px;
-    margin: 0 auto;
+  .tagline{ margin-top:0.4rem; color:var(--muted); font-size:1rem; }
+
+  .toolbar{ display:flex; justify-content:center; gap:0.75rem; margin:1.5rem 0 2rem; }
+
+  .btn-primary, .btn-secondary, .btn-small{
+    padding:0.6rem 1.1rem; border:none; border-radius:8px; font-weight:600; cursor:pointer; transition:all .12s ease;
   }
 
-  .header {
-    text-align: center;
-    margin-bottom: 3rem;
+  .btn-primary{
+    background:var(--accent); color:#fff; box-shadow:var(--card-shadow);
   }
 
-  h1 {
-    font-size: 3.5rem;
-    font-weight: 800;
-    background: linear-gradient(90deg, #ff6b6b, #da1b60);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin: 0;
+  .btn-primary:disabled{ opacity:.6; cursor:not-allowed; }
+
+  .btn-secondary{ background:transparent; color:var(--muted); border:1px solid rgba(34,34,34,0.06); }
+
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:1rem; }
+
+  .card{
+    background:var(--surface); border-radius:10px; overflow:hidden; box-shadow:var(--card-shadow); display:flex; flex-direction:column; cursor:pointer;
+    border: 1px solid rgba(34,34,34,0.04);
   }
 
-  .tagline {
-    font-size: 1.2rem;
-    color: #888;
-    margin-top: 0.5rem;
-  }
+  .card-content{ padding:1.2rem; flex-grow:1; }
 
-  .toolbar {
-    display: flex;
-    justify-content: center;
-    gap: 1rem;
-    margin-bottom: 2rem;
-  }
+  .title{ font-size:1.05rem; font-weight:600; margin-bottom:0.35rem; color:var(--text); }
 
-  .btn-primary, .btn-secondary, .btn-small {
-    padding: 0.8rem 1.6rem;
-    border: none;
-    border-radius: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
+  .meta{ color:var(--muted); font-size:0.9rem; }
 
-  .btn-primary {
-    background: #da1b60;
-    color: white;
-    font-size: 1.1rem;
-  }
+  .open-btn{ background:transparent; color:var(--accent); border:none; padding:0.6rem 0.9rem; font-weight:700; cursor:pointer; }
 
-  .btn-primary:hover:not(:disabled) {
-    background: #c01852;
-    transform: translateY(-2px);
-  }
+  .empty-state{ text-align:center; padding:3rem; color:var(--muted); font-size:1.05rem; }
 
-  .btn-secondary {
-    background: #252533;
-    color: #ccc;
-  }
+  /* Reader */
+  .reader{ height:100vh; display:flex; flex-direction:column; }
 
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 1.5rem;
-  }
+  .reader-header{ padding:1rem 1.5rem; background:transparent; border-bottom:1px solid rgba(34,34,34,0.04); display:flex; align-items:center; gap:1rem; }
 
-  .card {
-    background: #1a1a24;
-    border-radius: 16px;
-    overflow: hidden;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    transition: all 0.3s;
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-  }
+  .back-btn{ background:none; border:none; color:var(--muted); font-size:1.15rem; cursor:pointer; }
 
-  .card:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 12px 30px rgba(218, 27, 96, 0.2);
-  }
+  .reader-header h2{ margin:0; font-size:1.15rem; color:var(--text); font-family: Georgia, serif; }
 
-  .card-content {
-    padding: 1.5rem;
-    flex-grow: 1;
-  }
+  .split-view{ display:flex; flex:1; overflow:hidden; }
 
-  .title {
-    font-size: 1.3rem;
-    font-weight: 600;
-    margin-bottom: 0.5rem;
-    color: white;
-  }
+  .pdf-pane{ flex:6; display:flex; flex-direction:column; background:transparent; }
 
-  .meta {
-    font-size: 0.95rem;
-    color: #999;
-  }
+  .pdf-controls{ padding:0.85rem; display:flex; align-items:center; justify-content:center; gap:0.6rem; font-size:0.95rem; }
 
-  .open-btn {
-    background: #da1b60;
-    color: white;
-    border: none;
-    padding: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
+  .pdf-controls button{ background:transparent; color:var(--muted); border:1px solid rgba(34,34,34,0.06); width:36px; height:36px; border-radius:6px; cursor:pointer; }
 
-  .open-btn:hover {
-    background: #c01852;
-  }
+  .pdf-controls button:hover:not(:disabled){ border-color:var(--accent); color:var(--accent); }
 
-  .empty-state {
-    text-align: center;
-    padding: 4rem;
-    color: #666;
-    font-size: 1.2rem;
-  }
+  .page-info{ color:var(--muted); min-width:120px; text-align:center; }
 
-  /* Reader View */
-  .reader {
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
+  .pdf-viewer-container{ position:relative; flex:1; overflow:auto; display:flex; justify-content:center; align-items:flex-start; padding:28px; }
 
-  .reader-header {
-    padding: 1rem 2rem;
-    background: #14141c;
-    border-bottom: 1px solid #252533;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
+  .pdf-canvas-container{ position:relative; display:inline-block; background:#f7f6f4; border-radius:6px; box-shadow:0 10px 30px rgba(34,34,34,0.06); border:1px solid rgba(34,34,34,0.04); }
 
-  .back-btn {
-    background: none;
-    border: none;
-    color: #aaa;
-    font-size: 1.5rem;
-    cursor: pointer;
-  }
+  /* Text layer tweaks for selection but subtle visuals */
+  .textLayer{ position:absolute; left:0; top:0; right:0; bottom:0; overflow:hidden; opacity:1; line-height:1; z-index:2; pointer-events:auto !important; user-select:text !important; -webkit-user-select:text !important; }
 
-  .reader-header h2 {
-    margin: 0;
-    font-size: 1.4rem;
-    color: white;
-    flex-grow: 1;
-  }
+  .textLayer > span{ color:transparent !important; position:absolute; white-space:pre; cursor:text; transform-origin:0% 0%; }
 
-  .spacer { flex-grow: 1; }
+  .textLayer ::selection{ background: var(--accent-weak) !important; }
 
-  .split-view {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
-  }
+  canvas{ position:relative; z-index:1; display:block; }
 
-  .pdf-pane {
-    flex: 6;
-    background: #000;
-    display: flex;
-    flex-direction: column;
-  }
+  .pdf-overlay{ position:absolute; inset:0; background:rgba(255,255,255,0.6); color:var(--muted); display:flex; align-items:center; justify-content:center; font-size:1rem; z-index:10; }
 
-  .pdf-controls {
-    padding: 1rem;
-    background: #14141c;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-    font-size: 0.9rem;
-  }
+  .floating-excerpt-btn{ position:absolute; background:var(--accent); color:#fff; border:none; padding:0.5rem 0.9rem; border-radius:999px; font-weight:600; font-size:0.9rem; cursor:pointer; transform:translateX(-50%); box-shadow:0 8px 20px rgba(127,95,59,0.12); z-index:100; white-space:nowrap; }
 
-  .pdf-controls button {
-    background: #252533;
-    color: white;
-    border: none;
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 1.2rem;
-  }
+  .notes-pane{ flex:4; background:transparent; border-left:1px solid rgba(34,34,34,0.04); display:flex; flex-direction:column; }
 
-  .pdf-controls button:hover:not(:disabled) {
-    background: #da1b60;
-  }
+  .notes-header{ padding:1rem 1.2rem; border-bottom:1px solid rgba(34,34,34,0.04); }
 
-  .pdf-controls button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+  .notes-header h3{ margin:0; font-size:1.05rem; color:var(--text); }
 
-  .page-info {
-    color: #aaa;
-    min-width: 120px;
-    text-align: center;
-  }
+  .btn-small{ background:transparent; color:var(--muted); border:1px solid rgba(34,34,34,0.04); padding:0.45rem 0.8rem; border-radius:6px; }
 
-  /* FIXED PDF VIEWER SECTION */
-  .pdf-viewer-container {
-    position: relative;
-    flex: 1;
-    overflow: auto;
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-    padding: 20px;
-    background: #000;
-  }
+  .notes-placeholder{ flex-grow:1; padding:2.2rem; color:var(--muted); text-align:center; display:flex; flex-direction:column; justify-content:center; gap:0.6rem; }
 
-  .pdf-canvas-container {
-    position: relative;
-    display: inline-block;
-    background: white;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-  }
+  .hint{ font-size:0.95rem; color:var(--muted); }
 
-  /* CRITICAL TEXT LAYER FIXES */
-  .textLayer {
-    position: absolute;
-    left: 0;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    overflow: hidden;
-    opacity: 1;
-    line-height: 1;
-    z-index: 2;
-    pointer-events: auto !important;
-    user-select: text !important;
-    -webkit-user-select: text !important;
-  }
+  .excerpts-list{ padding:1rem; overflow-y:auto; flex:1; }
 
-  .textLayer > span {
-    color: transparent !important;
-    position: absolute;
-    white-space: pre;
-    cursor: text;
-    transform-origin: 0% 0%;
-  }
+  .excerpt-item{ background:linear-gradient(180deg,#fff,#fbfaf8); padding:1rem; border-radius:8px; margin-bottom:0.9rem; border-left:4px solid var(--accent); box-shadow:var(--card-shadow); }
 
-  /* Selection color */
-  .textLayer ::selection {
-    background: rgba(218, 27, 96, 0.4) !important;
-  }
+  .excerpt-text{ margin:0 0 0.4rem 0; font-style:italic; color:var(--text); }
 
-  /* Ensure canvas is below */
-  canvas {
-    position: relative;
-    z-index: 1;
-    display: block;
-  }
+  .excerpt-page{ margin:0; font-size:0.9rem; color:var(--muted); font-weight:500; }
 
-  .pdf-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.7);
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.2rem;
-    z-index: 10;
-  }
-
-  .floating-excerpt-btn {
-    position: absolute;
-    background: #da1b60;
-    color: white;
-    border: none;
-    padding: 0.6rem 1.2rem;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 0.9rem;
-    cursor: pointer;
-    transform: translateX(-50%);
-    box-shadow: 0 8px 25px rgba(218, 27, 96, 0.4);
-    z-index: 100;
-    white-space: nowrap;
-  }
-
-  .floating-excerpt-btn:hover {
-    background: #c01852;
-  }
-
-  .notes-pane {
-    flex: 4;
-    background: #1e1e28;
-    border-left: 1px solid #252533;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .notes-header {
-    padding: 1.5rem;
-    border-bottom: 1px solid #252533;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .notes-header h3 {
-    margin: 0;
-    font-size: 1.3rem;
-  }
-
-  .btn-small {
-    background: #2a2a38;
-    color: #ccc;
-    font-size: 0.9rem;
-    padding: 0.6rem 1rem;
-    border-radius: 8px;
-  }
-
-  .notes-placeholder {
-    flex-grow: 1;
-    padding: 3rem 2rem;
-    color: #888;
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 1rem;
-  }
-
-  .hint {
-    font-size: 0.95rem;
-    color: #666;
-  }
-
-  .excerpts-list {
-    padding: 1.5rem;
-    overflow-y: auto;
-    flex: 1;
-  }
-
-  .excerpt-item {
-    background: #252533;
-    padding: 1.2rem;
-    border-radius: 12px;
-    margin-bottom: 1rem;
-    border-left: 4px solid #da1b60;
-    transition: all 0.2s;
-  }
-
-  .excerpt-item:hover {
-    background: #2a2a38;
-  }
-
-  .excerpt-text {
-    margin: 0 0 0.5rem 0;
-    font-style: italic;
-    color: #ddd;
-    line-height: 1.4;
-  }
-
-  .excerpt-page {
-    margin: 0;
-    font-size: 0.9rem;
-    color: #aaa;
-    font-weight: 500;
-  }
-
-  .toast {
-    position: fixed;
-    bottom: 2rem;
-    left: 50%;
-    transform: translateX(-50%);
-    background: #da1b60;
-    color: white;
-    padding: 1rem 2rem;
-    border-radius: 12px;
-    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
-  }
+  .toast{ position:fixed; bottom:1.6rem; left:50%; transform:translateX(-50%); background:var(--accent); color:#fff; padding:0.6rem 1rem; border-radius:8px; box-shadow:0 8px 20px rgba(34,34,34,0.08); }
 </style>
